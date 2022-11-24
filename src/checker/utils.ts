@@ -41,7 +41,9 @@ export namespace vm {
         );
     }
     export function readUint32(bin: Vector, offset: number): number {
-        // read 8 bits from bin and convert it to a number
+        return bin.a[offset] | bin.a[offset + 1] << 8 | bin.a[offset + 2] << 16 | bin.a[offset + 3] << 24
+    }
+    export function readInt32(bin: Vector, offset: number): number {
         return bin.a[offset] | bin.a[offset + 1] << 8 | bin.a[offset + 2] << 16 | bin.a[offset + 3] << 24
     }
     export function readUint16(bin: Vector, offset: number): number {

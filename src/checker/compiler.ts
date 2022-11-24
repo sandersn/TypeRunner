@@ -1,4 +1,5 @@
 import { isFunctionDeclaration, isFunctionTypeNode, isMethodDeclaration, Node, NodeArray, SourceFile, SyntaxKind } from "typescript"
+import { debug } from "./core"
 import { ErrorCode, Op } from "./instructions"
 import { vm, Vector } from './utils'
 
@@ -533,17 +534,89 @@ export class Compiler {
     } else {
         throw new Error("function type not supported")
     }
-    let pushBodyType = () => {
+    const pushBodyType = () => {
         let bodyAddress = 0
         if (body) {
             bodyAddress = program.pushSubroutineNameLess()
             program.pushOp(Op.TypeArgument)
             this.handle(body, program)
-
+            program.pushOp(Op.Loads)
+            program.pushUint16(0)
+            program.pushUint16(0)
+            program.pushOp(Op.UnwrapInferBody)
+            program.popSubroutine()
         }
+        if (type) {
+            this.handle(type, program)
+            if (bodyAddress) {
+                program.pushOp(Op.CheckBody)
+                program.pushAddress(bodyAddress)
+            }
+        } else {
+            if (bodyAddress) {
+                // no type given, so we infer from body
+                program.pushOp(Op.InferBody)
+                program.pushAddress(bodyAddress)
+            } else {
+                program.pushOp(Op.Unknown)
+            }
+        }
+    }
+    if (typeParameters) {
+      //when there are type parameters, FunctionDeclaration returns a FunctionRef
+      //which indicates the VM that the function needs to be instantiated first.
+      const subroutineIndex = program.pushSubroutineNameLess()
+      const size = 1 + parameters.length
+      for (const param of typeParameters) {
+        this.handle(param, program)
+      }
+      program.pushSlots()
+      pushBodyType()
+      for(const param of parameters) {
+        this.handle(param, program)
+      }
+      this.pushName(withName, program)
+      program.pushOp(op, node)
+      program.pushUint16(size)
+      program.popSubroutine()
+      program.pushOp(Op.FunctionRef, node)
+      program.pushAddress(subroutineIndex)
+    } else {
+        const size = 1 + parameters.length
+        pushBodyType()
+        for (const param of parameters) {
+            this.handle(param, program)
+        }
+        this.pushName(withName, program)
+        program.pushOp(op, node)
+        program.pushUint16(size)
     }
   }
   handle(node: Node, program: Program): void {
-
+    switch (node.kind) {
+      case SyntaxKind.SourceFile:
+        for (const statement of (node as SourceFile).statements) {
+          this.handle(statement, program);
+        }
+        break;
+      case SyntaxKind.AnyKeyword:
+        program.pushOp(Op.Any, node);
+        break;
+      case SyntaxKind.NullKeyword:
+        program.pushOp(Op.Null, node);
+        break;
+      case SyntaxKind.UndefinedKeyword:
+        program.pushOp(Op.Undefined, node);
+        break;
+      case SyntaxKind.NeverKeyword:
+        program.pushOp(Op.Never, node);
+        break;
+      case SyntaxKind.BooleanKeyword:
+        program.pushOp(Op.Boolean, node);
+        break;
+        // many more like this, very boring
+      default:
+        debug(`Node ${node.kind} not handled`);
+    }
   }
 }
