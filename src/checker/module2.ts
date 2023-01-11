@@ -1,6 +1,7 @@
 import { Type } from "./types2"
 import { Vector, vm } from "./utils"
 import { eatWhitespace } from '../utf'
+import { Op } from "./instructions"
 
 export class ModuleSubroutine {
     exported = false
@@ -111,8 +112,39 @@ export class Module {
                 console.log(">>" + " ".repeat(space) + "^".repeat(map.end - map.pos) + "\n\n")
             }
         }
-        console.log(" " + e.message) + '\n')
+        console.log(" " + e.message + '\n')
     }
     console.log("Found " + this.errors.length + " errors in " + this.fileName)
   }
+}
+export function parseHeader(module: Module): void {
+    const bin = module.bin;
+    const end = bin.length;
+    let main = true
+    for (let i = 0; i < end; i++) {
+        const op = bin[i];
+        switch (op) {
+          case Op.Jump:
+            i = vm.readUint32(bin, i + 1) - 1; //minus 1 because for's i++
+            break;
+          case Op.SourceMap:
+            const size = vm.readUint32(bin, i + 1);
+            module.sourceMapAddress = i + 1 + 4;
+            i += 4 + size;
+            module.sourceMapAddressEnd = i;
+            break;
+          case Op.Subroutine:
+            const nameAddress = vm.readUint32(bin, i + 1);
+            const name = nameAddress ? vm.readStorage(bin, nameAddress + 8) : "";
+            const address = vm.readUint32(bin, i + 5);
+            const flags = vm.readUint32(bin, i + 5 + 4);
+            i = vm.eatParams(op, i)
+            module.subroutines.push(new ModuleSubroutine(name, address, flags, main));
+            main = false
+            break
+            case Op.Main:
+                return
+        }
+    }
+    throw new Error("No Op.Main found")
 }

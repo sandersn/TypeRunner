@@ -1,7 +1,8 @@
-import { Op } from './instructions'
+import { ErrorCode, Op } from './instructions'
 import { Type, TypeKind, TypeRef, TypeFlag } from './types2'
-import { Module, ModuleSubroutine } from './module2'
+import { parseHeader, Module, ModuleSubroutine, DiagnosticMessage } from './module2'
 import { vm } from './utils'
+import { const_hash } from '../hash'
 const poolSize = 10_000
 let stack: Type[] = new Array(4069 * 10)
 let sp = 0
@@ -39,14 +40,35 @@ export class ActiveSubroutine {
   /** @see SubroutineFlag */
   flags = 0;
   loop?: LoopHelper;
-  createLoop(var1: number, type: TypeRef): LoopHelper {}
-  createEmptyLoop(): LoopHelper {}
-  popLoop(): void {}
+  createLoop(var1: number, type: TypeRef): LoopHelper {
+    const newLoop = loops.push()
+    newLoop.set(var1, type)
+    newLoop.ip = this.ip
+    newLoop.startSP = sp
+    newLoop.previous = this.loop
+    return this.loop = newLoop
+  }
+  createEmptyLoop(): LoopHelper {
+    const newLoop = loops.push()
+    newLoop.ip = this.ip
+    newLoop.startSP = sp
+    newLoop.previous = this.loop
+    return this.loop = newLoop
+  }
+  popLoop(): void {
+    this.loop = this.loop!.previous
+    loops.pop()
+  }
   size(): number {
     return sp - this.initialSp;
   }
   op(): Op {
     return this.module.bin.a[this.ip];
+  }
+  pop(size: number): Type[] {
+    sp -= size
+    // just made up sp/size
+    return stack.slice(sp, size)
   }
   parseUint32() {
     const val = vm.readUint32(this.module.bin, this.ip + 1);
@@ -104,44 +126,146 @@ const loops = new StackPool<LoopHelper, typeof stackSize>(stackSize)
 let stepper = false
 let subroutine: ActiveSubroutine | undefined = undefined;
 function process(): void {
-
+  // ZoneScoped
+  const bin = subroutine!.module.bin;
+  while (true) {
+    // ZoneScoped
+    const ip = subroutine?.ip;
+    const op: Op = bin[subroutine!.ip];
+    switch (op) {
+      case Op.Halt:
+        return;
+      case Op.Error: {
+        const ip = subroutine?.ip;
+        const code = subroutine?.parseUint16();
+        switch (code) {
+          case ErrorCode.CannotFind: {
+            report(
+              new DiagnosticMessage(
+                `Cannot find name ${subroutine?.module.findIdentifier(ip)}`,
+                ip
+              )
+            );
+            break;
+          }
+          default:
+            report(new DiagnosticMessage(code?.toString(), ip));
+        }
+        break;
+      }
+      case Op.Pop: {
+        const type = pop();
+        gc(type);
+        break;
+      }
+      case Op.Never:
+        stack[sp++] = new Type(TypeKind.Never, const_hash("never"));
+        break;
+      case Op.Any:
+        stack[sp++] = new Type(TypeKind.Any, const_hash("any"));
+        break;
+      case Op.Undefined:
+        stack[sp++] = new Type(TypeKind.Undefined, const_hash("undefined"));
+        break;
+      case Op.Null:
+        stack[sp++] = new Type(TypeKind.Null, const_hash("null"));
+        break;
+      case Op.Unknown:
+        stack[sp++] = new Type(TypeKind.Unknown, const_hash("unknown"));
+        break;
+      case Op.Parameter:
+        const address = subroutine!.parseUint32();
+        const type = new Type(TypeKind.Parameter, 0);
+        type.readStorage(bin, address);
+        type.type = pop();
+        stack[sp++] = type;
+        break;
+      case Op.Function:
+        handleFunction(TypeKind.Function);
+        break;
+    }
+  }
+}
+function pop(): Type {
+  return stack[--sp];
+}
+function handleFunction(kind: TypeKind): Type {
+    const size = subroutine!.parseUint16()
+    const name = pop()
+    const type = new Type(kind, name.hash)
+    // first is the name
+    type.type = useAsRef(name)
+    const types = subroutine?.pop(size)
 }
 function clear(module: Module): void {
 
 }
 function prepare(module: Module): void {
-
+    parseHeader(module)
+    subroutine = activeSubroutines.reset()
+    subroutine.module = module
+    // first is main
+    subroutine.subroutine = module.subroutines[0]
+    subroutine.ip = module.subroutines[0].address
+    subroutine.initialSp = sp
+    subroutine.depth = 0
 }
-function drop(type: Type): void;
-function drop(types: TypeRef[]): void;
-function drop(types: Type | TypeRef[]): void {
+function use(type: Type): Type {
+    type.refCount++
+    return type
+}
+function useAsRef(type: Type, next?: TypeRef): TypeRef {
+    type.refCount++
+    return new TypeRef(type, next)
+}
+function drop(_type: Type): void;
+function drop(_types: TypeRef[]): void;
+function drop(_types: Type | TypeRef[]): void {
     
 }
-function gc(type: Type): void;
-function gc(types: TypeRef[]): void;
-function gc(types: Type | TypeRef[]): void {
-    
+function gcWithoutChildren(type: Type): void {
+    // just for debugging
+    if (type.flag & TypeFlag.Deleted) {
+        throw new Error("Type already deleted")
+    }
+    type.flag |= TypeFlag.Deleted;
+    // delete type;
+}
+function gc(_type?: Type): void {
 }
 function gcFlush(): void {
     
 }
 function gcStack(): void {
-    
+   sp = 0 
 }
 function gcStackAndFlush(): void {
-    
 }
 function allocate(kind: TypeKind, hash = 0): Type {
-
+    return new Type(kind, hash)
 }
 function allocateRefs(size: number): TypeRef[] {
-
+    return new Array(size)
 }
 function addHashChild(type: Type, child: Type, size: number): void {
-
+    const bucket = child.hash % size
+    const entry = type.children[bucket]
+    if (entry.type) {
+        // hash collision, prepend to the list
+        entry.next = useAsRef(child, entry.next)
+    } else {
+        entry.type = use(child)
+    }
 }
-function popFrame(): Type[] {
-
+function addHashChildWithoutRefCounter(type: Type, child: Type, size: number) {
+    const bucket = child.hash % size
+    const entry = type.children[bucket]
+    if (entry.type) {
+        // hash collision, prepend to the list
+        entry.next = new TypeRef(child, entry.next)
+    } else {
+        entry.type = child
+    }
 }
 function run(module: Module): void {
     // missing pool-clearing here, since I don't think I'll need it
@@ -230,3 +354,14 @@ export class CartesianProduct {
     return result
   }
 }
+function report(message: DiagnosticMessage) {
+    message.module = subroutine?.module
+    message.module?.errors.push(message)
+}
+enum TypeWidenFlag {
+    Any = 1<<1,
+    String = 1<<2,
+    Number = 1<<3,
+    Boolean = 1<<4,
+    BigInt = 1<<5,
+};

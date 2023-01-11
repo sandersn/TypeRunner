@@ -1,0 +1,9 @@
+{
+    "compilerOptions": {
+        "strict": true,
+        "module": "CommonJS",
+        "target": "esnext",
+        "outDir": "build"
+    },
+    "files": ["src/index.ts"]
+}

@@ -10,7 +10,8 @@
     "test": "tests"
   },
   "scripts": {
-    "bench": "ts-node tests/bench.ts"
+    "bench": "ts-node tests/bench.ts",
+    "test": "tsc && node build/index.js src/index.ts"
   },
   "repository": {
     "type": "git",
@@ -22,7 +23,7 @@
   },
   "homepage": "https://github.com/marcj/TypeRunner#readme",
   "devDependencies": {
-    "ts-node": "^10.9.1",
-    "typescript": "^4.7.4"
+    "@types/node": "^18.11.9",
+    "typescript": "^4.9"
   }
 }
